@@ -2,133 +2,116 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>RamCar Web Bluetooth</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>RamCar Control</title>
   <style>
-    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+    * {
+      box-sizing: border-box;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      touch-action: manipulation;
+    }
     body {
-      background: #111; color: #eee; font-family: sans-serif;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      height: 100vh; margin: 0;
+      background: #121212;
+      color: #fff;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
     }
-    #btnConnect {
-      padding: 12px 24px; font-size: 16px; border-radius: 8px;
-      border: none; background: #28a745; color: white; margin-bottom: 25px;
+    #status {
+      margin-bottom: 20px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 14px;
+      background: #222;
     }
-    .grid { display: grid; grid-template-columns: repeat(3, 80px); gap: 12px; }
+    .connected { color: #00e676; }
+    .disconnected { color: #ff5252; }
+
+    .pad-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 85px);
+      grid-template-rows: repeat(3, 85px);
+      gap: 12px;
+    }
     .btn {
-      height: 80px; font-size: 26px; border-radius: 12px; border: 2px solid #333;
-      background: #222; color: #fff; display: flex; align-items: center; justify-content: center;
+      background: #1f1f1f;
+      border: 2px solid #333;
+      border-radius: 16px;
+      color: #fff;
+      font-size: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      outline: none;
+      cursor: pointer;
     }
-    .btn:active, .btn.active { background: #007bff; border-color: #007bff; }
-    #up    { grid-column: 2; grid-row: 1; }
-    #left  { grid-column: 1; grid-row: 2; }
-    #right { grid-column: 3; grid-row: 2; }
-    #down  { grid-column: 2; grid-row: 3; }
+    .btn:active { background: #007bff; border-color: #007bff; }
+    
+    #btnUp    { grid-column: 2; grid-row: 1; }
+    #btnLeft  { grid-column: 1; grid-row: 2; }
+    #btnStop  { 
+      grid-column: 2; 
+      grid-row: 2; 
+      background: #dc3545; 
+      border-color: #b02a37; 
+      font-size: 22px; 
+      font-weight: bold; 
+    }
+    #btnStop:active { background: #a71d2a; }
+    #btnRight { grid-column: 3; grid-row: 2; }
+    #btnDown  { grid-column: 2; grid-row: 3; }
   </style>
 </head>
 <body>
 
-  <button id="btnConnect">Conectar RamCar (BLE)</button>
+  <div id="status" class="disconnected">● Desconectado</div>
 
-  <div class="grid">
-    <button class="btn" id="up" data-cmd="F">▲</button>
-    <button class="btn" id="left" data-cmd="L">◀</button>
-    <button class="btn" id="right" data-cmd="R">▶</button>
-    <button class="btn" id="down" data-cmd="B">▼</button>
+  <div class="pad-grid">
+    <button class="btn" id="btnUp" onclick="enviarComando('F')">▲</button>
+    <button class="btn" id="btnLeft" onclick="enviarComando('L')">◀</button>
+    <button class="btn" id="btnStop" onclick="enviarComando('S')">■</button>
+    <button class="btn" id="btnRight" onclick="enviarComando('R')">▶</button>
+    <button class="btn" id="btnDown" onclick="enviarComando('B')">▼</button>
   </div>
 
   <script>
-    const SERVICE_UUID        = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-    const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+    let ws = null;
+    const statusElem = document.getElementById("status");
 
-    let bleCharacteristic = null;
-    let heartbeatTimer = null;
-    let activeCmd = null;
+    function initWebSocket() {
+      const host = location.host || "192.168.4.1";
+      ws = new WebSocket(`ws://${host}/ws`);
 
-    const btnConnect = document.getElementById("btnConnect");
+      ws.onopen = () => {
+        statusElem.textContent = "● Conectado";
+        statusElem.className = "connected";
+      };
 
-    // 1. Emparejamiento por Web Bluetooth
-    btnConnect.addEventListener("click", async () => {
-      try {
-        const device = await navigator.bluetooth.requestDevice({
-          filters: [{ name: "RamCar_BLE" }],
-          optionalServices: [SERVICE_UUID]
-        });
+      ws.onclose = () => {
+        statusElem.textContent = "● Reconectando...";
+        statusElem.className = "disconnected";
+        setTimeout(initWebSocket, 1500);
+      };
 
-        device.addEventListener("gattserverdisconnected", onDisconnected);
-
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(SERVICE_UUID);
-        bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
-
-        btnConnect.textContent = "Conectado";
-        btnConnect.style.background = "#007bff";
-      } catch (error) {
-        console.error("Fallo al conectar BLE:", error);
-      }
-    });
-
-    function onDisconnected() {
-      btnConnect.textContent = "Reconectar";
-      btnConnect.style.background = "#dc3545";
-      bleCharacteristic = null;
-      detener();
+      ws.onerror = () => ws.close();
     }
 
-    // 2. Envío de datos binarios directos
-    async function enviarComando(texto) {
-      if (!bleCharacteristic) return;
-      try {
-        const encoder = new TextEncoder();
-        // writeValueWithoutResponse minimiza la latencia (no espera ACK)
-        await bleCharacteristic.writeValueWithoutResponse(encoder.encode(texto));
-      } catch (e) {
-        console.error("Error al escribir BLE:", e);
-      }
+    // Ráfaga redundante de 3 disparos para asegurar entrega inmediata
+    function enviarComando(cmd) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      
+      ws.send(cmd);
+      setTimeout(() => { if (ws.readyState === WebSocket.OPEN) ws.send(cmd); }, 30);
+      setTimeout(() => { if (ws.readyState === WebSocket.OPEN) ws.send(cmd); }, 60);
     }
 
-    function iniciar(cmd, btn) {
-      if (activeCmd === cmd) return;
-      activeCmd = cmd;
-      btn.classList.add("active");
-
-      enviarComando(cmd);
-
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = setInterval(() => enviarComando("H"), 250);
-    }
-
-    function detener() {
-      if (!activeCmd) return;
-      activeCmd = null;
-
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
-
-      document.querySelectorAll(".btn").forEach(b => b.classList.remove("active"));
-      enviarComando("S");
-    }
-
-    // 3. Listeners táctiles y mouse
-    document.querySelectorAll(".btn").forEach(btn => {
-      const cmd = btn.getAttribute("data-cmd");
-
-      btn.addEventListener("touchstart", (e) => { e.preventDefault(); iniciar(cmd, btn); }, { passive: false });
-      btn.addEventListener("touchend", (e) => { e.preventDefault(); detener(); }, { passive: false });
-      btn.addEventListener("touchcancel", (e) => { e.preventDefault(); detener(); }, { passive: false });
-
-      btn.addEventListener("mousedown", () => iniciar(cmd, btn));
-      btn.addEventListener("mouseup", detener);
-      btn.addEventListener("mouseleave", detener);
-    });
+    window.addEventListener("load", initWebSocket);
   </script>
 </body>
 </html>
-
-void loop() {
-  // Watchdog de seguridad
-  if (deviceConnected && (millis() - lastCommandTime > TIMEOUT_MOTORES)) {
-    pararMotores();
-  }
-}

@@ -2,49 +2,23 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>RamCar Web Bluetooth</title>
   <style>
-    * { box-sizing: border-box; -webkit-user-select: none; user-select: none; }
+    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
     body {
-      background: #111;
-      color: #fff;
-      font-family: sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      margin: 0;
-      touch-action: manipulation;
+      background: #111; color: #eee; font-family: sans-serif;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: 100vh; margin: 0;
     }
     #btnConnect {
-      padding: 12px 24px;
-      font-size: 16px;
-      font-weight: bold;
-      border: none;
-      border-radius: 8px;
-      background: #00e676;
-      color: #000;
-      cursor: pointer;
-      margin-bottom: 25px;
+      padding: 12px 24px; font-size: 16px; border-radius: 8px;
+      border: none; background: #28a745; color: white; margin-bottom: 25px;
     }
-    #btnConnect.connected { background: #ff5252; color: #fff; }
-    .pad {
-      display: grid;
-      grid-template-columns: repeat(3, 85px);
-      grid-template-rows: repeat(3, 85px);
-      gap: 12px;
-    }
+    .grid { display: grid; grid-template-columns: repeat(3, 80px); gap: 12px; }
     .btn {
-      background: #222;
-      border: 2px solid #444;
-      border-radius: 16px;
-      color: #fff;
-      font-size: 28px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      height: 80px; font-size: 26px; border-radius: 12px; border: 2px solid #333;
+      background: #222; color: #fff; display: flex; align-items: center; justify-content: center;
     }
     .btn:active, .btn.active { background: #007bff; border-color: #007bff; }
     #up    { grid-column: 2; grid-row: 1; }
@@ -55,9 +29,9 @@
 </head>
 <body>
 
-  <button id="btnConnect">Conectar BLE</button>
+  <button id="btnConnect">Conectar RamCar (BLE)</button>
 
-  <div class="pad">
+  <div class="grid">
     <button class="btn" id="up" data-cmd="F">▲</button>
     <button class="btn" id="left" data-cmd="L">◀</button>
     <button class="btn" id="right" data-cmd="R">▶</button>
@@ -65,220 +39,92 @@
   </div>
 
   <script>
-    const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+    const SERVICE_UUID        = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
     const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
-    let bleDevice = null;
     let bleCharacteristic = null;
+    let heartbeatTimer = null;
+    let activeCmd = null;
+
     const btnConnect = document.getElementById("btnConnect");
 
-    // Función para conectar el navegador al ESP32 por BLE
-    async function toggleConnection() {
-      if (bleDevice && bleDevice.gatt.connected) {
-        bleDevice.gatt.disconnect();
-        return;
-      }
-
+    // 1. Emparejamiento por Web Bluetooth
+    btnConnect.addEventListener("click", async () => {
       try {
-        // 1. Abre el diálogo nativo del sistema para elegir el dispositivo
-        bleDevice = await navigator.bluetooth.requestDevice({
+        const device = await navigator.bluetooth.requestDevice({
           filters: [{ name: "RamCar_BLE" }],
           optionalServices: [SERVICE_UUID]
         });
 
-        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+        device.addEventListener("gattserverdisconnected", onDisconnected);
 
-        // 2. Conectar al servidor GATT
-        const server = await bleDevice.gatt.connect();
-
-        // 3. Obtener el servicio y la característica de control
+        const server = await device.gatt.connect();
         const service = await server.getPrimaryService(SERVICE_UUID);
         bleCharacteristic = await service.getCharacteristic(CHARACTERISTIC_UUID);
 
-        btnConnect.textContent = "Desconectar";
-        btnConnect.classList.add("connected");
+        btnConnect.textContent = "Conectado";
+        btnConnect.style.background = "#007bff";
       } catch (error) {
-        console.error("Error al conectar BLE:", error);
+        console.error("Fallo al conectar BLE:", error);
       }
-    }
+    });
 
     function onDisconnected() {
-      btnConnect.textContent = "Conectar BLE";
-      btnConnect.classList.remove("connected");
+      btnConnect.textContent = "Reconectar";
+      btnConnect.style.background = "#dc3545";
       bleCharacteristic = null;
+      detener();
     }
 
-    // Envío del comando por Bluetooth
-    function sendCommand(cmd) {
-      if (bleCharacteristic) {
+    // 2. Envío de datos binarios directos
+    async function enviarComando(texto) {
+      if (!bleCharacteristic) return;
+      try {
         const encoder = new TextEncoder();
-        // writeValueWithoutResponse ofrece la menor latencia posible
-        bleCharacteristic.writeValueWithoutResponse(encoder.encode(cmd))
-          .catch(err => console.error("Error al enviar:", err));
+        // writeValueWithoutResponse minimiza la latencia (no espera ACK)
+        await bleCharacteristic.writeValueWithoutResponse(encoder.encode(texto));
+      } catch (e) {
+        console.error("Error al escribir BLE:", e);
       }
     }
 
-    btnConnect.addEventListener("click", toggleConnection);
+    function iniciar(cmd, btn) {
+      if (activeCmd === cmd) return;
+      activeCmd = cmd;
+      btn.classList.add("active");
 
-    // Asignación de eventos Press / Release
+      enviarComando(cmd);
+
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = setInterval(() => enviarComando("H"), 250);
+    }
+
+    function detener() {
+      if (!activeCmd) return;
+      activeCmd = null;
+
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+
+      document.querySelectorAll(".btn").forEach(b => b.classList.remove("active"));
+      enviarComando("S");
+    }
+
+    // 3. Listeners táctiles y mouse
     document.querySelectorAll(".btn").forEach(btn => {
       const cmd = btn.getAttribute("data-cmd");
 
-      const start = (e) => {
-        e.preventDefault();
-        btn.classList.add("active");
-        sendCommand(cmd);
-      };
+      btn.addEventListener("touchstart", (e) => { e.preventDefault(); iniciar(cmd, btn); }, { passive: false });
+      btn.addEventListener("touchend", (e) => { e.preventDefault(); detener(); }, { passive: false });
+      btn.addEventListener("touchcancel", (e) => { e.preventDefault(); detener(); }, { passive: false });
 
-      const stop = (e) => {
-        e.preventDefault();
-        btn.classList.remove("active");
-        sendCommand("S");
-      };
-
-      btn.addEventListener("touchstart", start, { passive: false });
-      btn.addEventListener("touchend", stop, { passive: false });
-      btn.addEventListener("touchcancel", stop, { passive: false });
-
-      btn.addEventListener("mousedown", start);
-      btn.addEventListener("mouseup", stop);
-      btn<Image alt="Arquitectura BLE y pila GATT para microcontroladores ESP32" caption="Pila Bluetooth Low Energy en ESP32" src="image_agent_tag_12711553090804823311"/>
-
----
-
-Para comunicar una interfaz web con el ESP32-C3 mediante Bluetooth Low Energy (BLE), se define un **Servicio GATT** y una **Característica** identificados por UUIDs coincidentes en ambos extremos. El navegador escribe bytes en esa característica y el ESP32 reacciona mediante un callback de interrupción.
-
----
-
-### 1. Código ESP32-C3 (Servidor BLE con Watchdog)
-
-Este sketch no levanta Wi-Fi. Crea un periférico BLE llamado `"RamCar_BLE"` y escucha escrituras directas sobre los pines de tu puente H:
-
-```cpp
-#include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEServer.h>
-
-// UUIDs personalizados (deben coincidir con el frontend JS)
-#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-
-// Pines puente H en ESP32-C3 Super Mini
-const int PIN_IN1 = 2;
-const int PIN_IN2 = 3;
-const int PIN_IN3 = 4;
-const int PIN_IN4 = 5;
-
-unsigned long lastCommandTime = 0;
-const unsigned long TIMEOUT_MOTORES = 800;
-bool deviceConnected = false;
-
-void pararMotores() {
-  digitalWrite(PIN_IN1, LOW);
-  digitalWrite(PIN_IN2, LOW);
-  digitalWrite(PIN_IN3, LOW);
-  digitalWrite(PIN_IN4, LOW);
-}
-
-void moverAdelante() {
-  digitalWrite(PIN_IN1, HIGH);
-  digitalWrite(PIN_IN2, LOW);
-  digitalWrite(PIN_IN3, HIGH);
-  digitalWrite(PIN_IN4, LOW);
-}
-
-void moverAtras() {
-  digitalWrite(PIN_IN1, LOW);
-  digitalWrite(PIN_IN2, HIGH);
-  digitalWrite(PIN_IN3, LOW);
-  digitalWrite(PIN_IN4, HIGH);
-}
-
-void girarIzquierda() {
-  digitalWrite(PIN_IN1, LOW);
-  digitalWrite(PIN_IN2, HIGH);
-  digitalWrite(PIN_IN3, HIGH);
-  digitalWrite(PIN_IN4, LOW);
-}
-
-void girarDerecha() {
-  digitalWrite(PIN_IN1, HIGH);
-  digitalWrite(PIN_IN2, LOW);
-  digitalWrite(PIN_IN3, LOW);
-  digitalWrite(PIN_IN4, HIGH);
-}
-
-// Callback de conexión/desconexión
-class ServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      deviceConnected = true;
-    };
-
-    void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
-      pararMotores();
-      // Reiniciar publicidad para permitir reconexiones
-      pServer->getAdvertising()->start();
-    }
-};
-
-// Callback al recibir datos desde el navegador
-class ControlCallbacks: public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) {
-      String value = pCharacteristic->getValue();
-
-      if (value.length() > 0) {
-        char cmd = value[0];
-        lastCommandTime = millis();
-
-        switch (cmd) {
-          case 'F': moverAdelante();   break;
-          case 'B': moverAtras();      break;
-          case 'L': girarIzquierda();  break;
-          case 'R': girarDerecha();    break;
-          case 'S': pararMotores();    break;
-          case 'H': /* Heartbeat */     break;
-        }
-      }
-    }
-};
-
-void setup() {
-  Serial.begin(115200);
-
-  pinMode(PIN_IN1, OUTPUT);
-  pinMode(PIN_IN2, OUTPUT);
-  pinMode(PIN_IN3, OUTPUT);
-  pinMode(PIN_IN4, OUTPUT);
-  pararMotores();
-
-  // Inicializar BLE
-  BLEDevice::init("RamCar_BLE");
-  BLEServer *pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new ServerCallbacks());
-
-  BLEService *pService = pServer->createService(SERVICE_UUID);
-
-  BLECharacteristic *pCharacteristic = pService->createCharacteristic(
-                                         CHARACTERISTIC_UUID,
-                                         BLECharacteristic::PROPERTY_WRITE |
-                                         BLECharacteristic::PROPERTY_WRITE_NR
-                                       );
-
-  pCharacteristic->setCallbacks(new ControlCallbacks());
-  pService->start();
-
-  // Configurar y encender anuncio (Advertising)
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06);
-  pAdvertising->setMinPreferred(0x12);
-  BLEDevice::startAdvertising();
-
-  Serial.println("BLE RamCar iniciado y visible.");
-}
+      btn.addEventListener("mousedown", () => iniciar(cmd, btn));
+      btn.addEventListener("mouseup", detener);
+      btn.addEventListener("mouseleave", detener);
+    });
+  </script>
+</body>
+</html>
 
 void loop() {
   // Watchdog de seguridad
